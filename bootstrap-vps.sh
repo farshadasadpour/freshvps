@@ -7,6 +7,12 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+SSH_PUBKEY="${SSH_PUBKEY:-}"
+if [ -z "$SSH_PUBKEY" ] && [ -t 0 ]; then
+  echo "[+] Enter public SSH key for root access:"
+  read -r SSH_PUBKEY
+fi
+
 echo "[+] Updating system"
 apt update
 apt upgrade -y
@@ -112,6 +118,29 @@ ClientAliveCountMax 2
 EOF
 
 sshd -t
+
+echo "[+] Installing root SSH key"
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+if [ -n "$SSH_PUBKEY" ]; then
+  touch /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
+  if ! grep -Fxq "$SSH_PUBKEY" /root/.ssh/authorized_keys 2>/dev/null; then
+    printf '%s\n' "$SSH_PUBKEY" >> /root/.ssh/authorized_keys
+  fi
+else
+  echo "WARNING: No SSH public key supplied; root authorized_keys not updated."
+fi
+
+mkdir -p /root/.docker
+chmod 700 /root/.docker
+if [ -d /root/.docker/config.json ]; then
+  rm -rf /root/.docker/config.json
+fi
+if [ ! -f /root/.docker/config.json ]; then
+  printf '{}\n' > /root/.docker/config.json
+  chmod 600 /root/.docker/config.json
+fi
 
 ###############################################################################
 # FIREWALL
