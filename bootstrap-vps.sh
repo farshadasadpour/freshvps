@@ -4,21 +4,23 @@ set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "This script must be run as root. Use sudo or login as root."
-  exit 1root
+  exit 1
 fi
 
 SSH_PUBKEY="${SSH_PUBKEY:-}"
 if [ -z "$SSH_PUBKEY" ]; then
   if [ -t 0 ]; then
     echo "[!] IMPORTANT: SSH root key needed for secure access."
-    echo "[+] Enter public SSH key for root access (or press Enter to skip):"
-    read -r SSH_PUBKEY || true
-  else
-    echo "[!] WARNING: No SSH_PUBKEY environment variable provided."
-    echo "[!] To set a root SSH key, run:"
-    echo "[!]   SSH_PUBKEY=\"\$(cat ~/.ssh/id_rsa.pub)\" sudo bash bootstrap-vps.sh"
-    echo "[!] Continuing without SSH key setup. Access via VNC only."
+    echo "[+] Enter public SSH key for root access:"
+    read -r SSH_PUBKEY
   fi
+fi
+
+if [ -z "$SSH_PUBKEY" ]; then
+  echo "[!] ERROR: No SSH public key provided."
+  echo "[!] Set SSH_PUBKEY=\"\$(cat ~/.ssh/id_rsa.pub)\" before running the script."
+  echo "[!] Example: SSH_PUBKEY=\"\$(cat ~/.ssh/id_rsa.pub)\" sudo bash bootstrap-vps.sh"
+  exit 1
 fi
 
 echo "[+] Updating system"
