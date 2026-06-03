@@ -124,7 +124,13 @@ ClientAliveInterval 300
 ClientAliveCountMax 2
 EOF
 
-sshd -t
+if sshd -t; then
+  echo "[+] SSH config syntax OK"
+  systemctl enable --now ssh
+else
+  echo "[!] SSH config invalid, aborting."
+  exit 1
+fi
 
 echo "[+] Configuring SSH authorized_keys"
 mkdir -p /root/.ssh
