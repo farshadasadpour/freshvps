@@ -4,7 +4,7 @@ set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "This script must be run as root. Use sudo or login as root."
-  exit 1
+  exit 1root
 fi
 
 SSH_PUBKEY="${SSH_PUBKEY:-}"
@@ -56,6 +56,7 @@ apt install -y \
   build-essential \
   bash-completion \
   zsh \
+  openssh-server \
   fail2ban \
   ufw \
   unattended-upgrades \
@@ -127,6 +128,17 @@ EOF
 if sshd -t; then
   echo "[+] SSH config syntax OK"
   systemctl enable --now ssh
+  if ! systemctl is-active --quiet ssh; then
+    echo "[!] SSH service failed to start"
+    systemctl status ssh --no-pager || true
+    journalctl -u ssh --no-pager -n 20 || true
+    exit 1
+  fi
+  if ! ss -tlnp | grep -q ':22'; then
+    echo "[!] SSH is not listening on port 22"
+    ss -tlnp | grep ':22' || true
+    exit 1
+  fi
 else
   echo "[!] SSH config invalid, aborting."
   exit 1
