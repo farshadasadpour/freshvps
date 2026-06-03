@@ -109,7 +109,7 @@ mkdir -p /etc/ssh/sshd_config.d
 cat >/etc/ssh/sshd_config.d/99-security.conf <<'EOF'
 PermitRootLogin prohibit-password
 
-PasswordAuthentication no
+PasswordAuthentication yes
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
 
