@@ -16,12 +16,6 @@ Or fetch and run it directly on the VPS with `curl`:
 curl -fsSL https://raw.githubusercontent.com/farshadasadpour/freshvps/main/bootstrap-vps.sh | sudo bash
 ```
 
-To provide the root public SSH key without prompts, use:
-
-```bash
-SSH_PUBKEY="$(cat ~/.ssh/id_rsa.pub)" curl -fsSL https://raw.githubusercontent.com/farshadasadpour/freshvps/main/bootstrap-vps.sh | sudo bash
-```
-
 The script performs:
 
 - system update and upgrade

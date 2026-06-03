@@ -33,7 +33,6 @@ apt install -y \
   jq \
   tree \
   htop \
-  btop \
   tmux \
   screen \
   net-tools \
