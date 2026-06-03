@@ -8,9 +8,17 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 SSH_PUBKEY="${SSH_PUBKEY:-}"
-if [ -z "$SSH_PUBKEY" ] && [ -t 0 ]; then
-  echo "[+] Enter public SSH key for root access:"
-  read -r SSH_PUBKEY
+if [ -z "$SSH_PUBKEY" ]; then
+  if [ -t 0 ]; then
+    echo "[!] IMPORTANT: SSH root key needed for secure access."
+    echo "[+] Enter public SSH key for root access (or press Enter to skip):"
+    read -r SSH_PUBKEY || true
+  else
+    echo "[!] WARNING: No SSH_PUBKEY environment variable provided."
+    echo "[!] To set a root SSH key, run:"
+    echo "[!]   SSH_PUBKEY=\"\$(cat ~/.ssh/id_rsa.pub)\" sudo bash bootstrap-vps.sh"
+    echo "[!] Continuing without SSH key setup. Access via VNC only."
+  fi
 fi
 
 echo "[+] Updating system"
@@ -118,7 +126,7 @@ EOF
 
 sshd -t
 
-echo "[+] Installing root SSH key"
+echo "[+] Configuring SSH authorized_keys"
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
 if [ -n "$SSH_PUBKEY" ]; then
@@ -126,9 +134,12 @@ if [ -n "$SSH_PUBKEY" ]; then
   chmod 600 /root/.ssh/authorized_keys
   if ! grep -Fxq "$SSH_PUBKEY" /root/.ssh/authorized_keys 2>/dev/null; then
     printf '%s\n' "$SSH_PUBKEY" >> /root/.ssh/authorized_keys
+    echo "[+] SSH public key added to /root/.ssh/authorized_keys"
   fi
 else
-  echo "WARNING: No SSH public key supplied; root authorized_keys not updated."
+  echo "[!] Skipping SSH key setup (no SSH_PUBKEY provided)."
+  touch /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
 fi
 
 mkdir -p /root/.docker
