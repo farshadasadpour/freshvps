@@ -60,28 +60,20 @@ EOF
   if [ -n "${TELEGRAM_API_TOKEN:-}" ] && [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
     echo "[+] TELEGRAM_CHAT_ID not provided; trying discovery from getUpdates..."
     if ! discover_chat_id; then
-      echo "[!] TELEGRAM_CHAT_ID not set and could not be discovered. Send a message to the bot and rerun with TELEGRAM_CHAT_ID." >&2
+      echo "[!] TELEGRAM_CHAT_ID not set and could not be discovered. The service will start with TOKEN only and continue retrying on boot." >&2
     fi
   fi
 
-  if [ -n "${TELEGRAM_API_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+  if [ -n "${TELEGRAM_API_TOKEN:-}" ] || [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
     echo "[+] Writing default environment file to $ENV_FILE"
     mkdir -p "$(dirname "$ENV_FILE")"
     cat >"$ENV_FILE" <<EOF
-TELEGRAM_API_TOKEN=${TELEGRAM_API_TOKEN}
-TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-EOF
-    chmod 600 "$ENV_FILE"
-  elif [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
-    echo "[+] Writing default environment file to $ENV_FILE"
-    mkdir -p "$(dirname "$ENV_FILE")"
-    cat >"$ENV_FILE" <<EOF
-TELEGRAM_API_TOKEN=${TELEGRAM_BOT_TOKEN}
-TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+TELEGRAM_API_TOKEN=${TELEGRAM_API_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}
+TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
 EOF
     chmod 600 "$ENV_FILE"
   else
-    echo "[!] TELEGRAM_API_TOKEN or TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID not set. Create $ENV_FILE manually."
+    echo "[!] TELEGRAM_API_TOKEN or TELEGRAM_BOT_TOKEN not set. Create $ENV_FILE manually."
   fi
 
   systemctl daemon-reload
@@ -133,16 +125,20 @@ EOF
   exit 1
 fi
 
+wait_for_chat_id() {
+  while [ -z "$TELEGRAM_CHAT_ID" ]; do
+    echo "[!] TELEGRAM_CHAT_ID is not set. Attempting discovery from getUpdates..."
+    if discover_chat_id; then
+      echo "[+] Telegram chat_id discovered. Starting monitor."
+      return 0
+    fi
+    echo "[!] Telegram chat_id still not available. Send a message to the bot and wait 30 seconds."
+    sleep 30
+  done
+}
+
 if [ -z "$TELEGRAM_CHAT_ID" ]; then
-  if ! discover_chat_id; then
-    cat <<EOF >&2
-[!] TELEGRAM_CHAT_ID is not set and could not be discovered from getUpdates.
-Send a message to your bot first, then rerun this script.
-You can also get the chat_id manually by calling:
-  curl -sS https://api.telegram.org/bot${TELEGRAM_API_TOKEN}/getUpdates
-EOF
-    exit 1
-  fi
+  wait_for_chat_id
 fi
 
 if ! command -v curl >/dev/null 2>&1; then
