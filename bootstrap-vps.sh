@@ -168,6 +168,8 @@ else
   exit 1
 fi
 
+systemctl restart sshd
+
 mkdir -p /root/.docker
 chmod 700 /root/.docker
 if [ -d /root/.docker/config.json ]; then
