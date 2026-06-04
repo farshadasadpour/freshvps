@@ -61,7 +61,6 @@ apt install -y \
   build-essential \
   bash-completion \
   zsh \
-  openssh-server \
   fail2ban \
   ufw \
   unattended-upgrades \
