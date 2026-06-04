@@ -89,7 +89,7 @@ discover_chat_id() {
   local resp
   resp=$(curl -sS "https://api.telegram.org/bot${TELEGRAM_API_TOKEN}/getUpdates?limit=5") || return 1
   if [[ "$resp" =~ "ok":true ]]; then
-    if [[ "$resp" =~ "chat"[^"]*"id"[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+    if [[ "$resp" =~ \"chat\"[^\"]*\"id\"[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
       TELEGRAM_CHAT_ID="${BASH_REMATCH[1]}"
       echo "[+] Discovered TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
       return 0
