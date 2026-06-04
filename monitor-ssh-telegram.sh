@@ -7,7 +7,11 @@ set -euo pipefail
 # Sends a Telegram message when an SSH login succeeds
 # and when fail2ban bans an IP.
 
-SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+if [ ! -f "$SCRIPT_PATH" ]; then
+  SCRIPT_PATH=""
+fi
+SCRIPT_URL="https://raw.githubusercontent.com/farshadasadpour/freshvps/main/monitor-ssh-telegram.sh"
 DEST_BIN="/usr/local/bin/monitor-ssh-telegram.sh"
 UNIT_PATH="/etc/systemd/system/monitor-ssh-telegram.service"
 ENV_FILE="/etc/default/monitor-ssh-telegram"
@@ -20,7 +24,16 @@ install_service() {
 
   echo "[+] Installing monitor to $DEST_BIN"
   mkdir -p "$(dirname "$DEST_BIN")"
-  cp "$SCRIPT_PATH" "$DEST_BIN"
+  if [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
+    cp "$SCRIPT_PATH" "$DEST_BIN"
+  else
+    echo "[+] Source script is not a local file; downloading from $SCRIPT_URL"
+    if ! command -v curl >/dev/null 2>&1; then
+      echo "[!] curl is required to download the script when install runs from stdin." >&2
+      exit 1
+    fi
+    curl -fsSL "$SCRIPT_URL" -o "$DEST_BIN"
+  fi
   chmod 755 "$DEST_BIN"
 
   echo "[+] Creating systemd service at $UNIT_PATH"
