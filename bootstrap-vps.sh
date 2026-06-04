@@ -117,6 +117,16 @@ if ! id "$SSH_USER" >/dev/null 2>&1; then
   useradd -m -s /usr/bin/zsh -G sudo "$SSH_USER"
 fi
 
+# Grant passwordless sudo for the new user.
+cat >/etc/sudoers.d/$SSH_USER <<EOF
+$SSH_USER ALL=(ALL) NOPASSWD:ALL
+EOF
+chmod 440 /etc/sudoers.d/$SSH_USER
+visudo -cf /etc/sudoers.d/$SSH_USER >/dev/null 2>&1 || {
+  echo "[!] Invalid sudoers file for $SSH_USER"
+  exit 1
+}
+
 mkdir -p /home/$SSH_USER/.ssh
 chmod 700 /home/$SSH_USER/.ssh
 chown $SSH_USER:$SSH_USER /home/$SSH_USER/.ssh
