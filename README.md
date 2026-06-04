@@ -6,17 +6,33 @@ A simple VPS bootstrap script for Debian/Ubuntu-based systems.
 
 ### Option 1: With SSH Key (Recommended)
 
-Provide your SSH public key **before running the script**:
+Provide your SSH public key **before running the script**.
+This works when the shell running the command has access to the key file.
 
 ```bash
-SSH_PUBKEY="$(cat ~/.ssh/id_rsa.pub)" sudo bash bootstrap-vps.sh
+SSH_PUBKEY="$(cat ~/.ssh/id_rsa.pub)" sudo -E bash bootstrap-vps.sh
 ```
 
 Or via curl:
 
 ```bash
-SSH_PUBKEY="$(cat ~/.ssh/id_rsa.pub)" bash -c 'curl -fsSL https://raw.githubusercontent.com/farshadasadpour/freshvps/main/bootstrap-vps.sh | sudo bash'
+SSH_PUBKEY="$(cat ~/.ssh/id_rsa.pub)" sudo -E bash -c 'curl -fsSL https://raw.githubusercontent.com/farshadasadpour/freshvps/main/bootstrap-vps.sh | bash'
 ```
+
+If you want a custom SSH user or custom port:
+
+```bash
+SSH_PUBKEY="$(cat ~/.ssh/id_rsa.pub)" SSH_USER=sumiroz SSH_PORT=2825 sudo -E bash bootstrap-vps.sh
+```
+
+Or via curl:
+
+```bash
+SSH_PUBKEY="$(cat ~/.ssh/id_rsa.pub)" SSH_USER=sumiroz SSH_PORT=2825 sudo -E bash -c 'curl -fsSL https://raw.githubusercontent.com/farshadasadpour/freshvps/main/bootstrap-vps.sh | bash'
+```
+
+> Note: `SSH_PUBKEY=$(cat ~/.ssh/id_rsa.pub)` reads the key from the machine where you run the command.
+If you run this from a local laptop, it uses the local key file. If you run it on the VPS and that file is missing, it will fail.
 
 ### Option 2: Interactive Prompt (Local Terminal Only)
 
@@ -26,7 +42,7 @@ If running directly on the VPS (not via curl pipe):
 sudo bash bootstrap-vps.sh
 ```
 
-The script will prompt for your SSH public key.
+The script will prompt for your SSH public key. Paste your local public key into the prompt.
 
 ### Option 3: Via VNC Without SSH Setup
 

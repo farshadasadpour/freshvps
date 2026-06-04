@@ -8,10 +8,13 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 SSH_PUBKEY="${SSH_PUBKEY:-}"
+SSH_USER="${SSH_USER:-code}"
+SSH_PORT="${SSH_PORT:-2825}"
+
 if [ -z "$SSH_PUBKEY" ]; then
   if [ -t 0 ]; then
-    echo "[!] IMPORTANT: SSH root key needed for secure access."
-    echo "[+] Enter public SSH key for root access:"
+    echo "[!] IMPORTANT: SSH public key needed for secure access."
+    echo "[+] Enter public SSH public key for the admin user:"
     read -r SSH_PUBKEY
   fi
 fi
@@ -108,14 +111,32 @@ echo "[+] Configuring SSH"
 
 mkdir -p /etc/ssh/sshd_config.d
 
-cat >/etc/ssh/sshd_config.d/99-security.conf <<'EOF'
-PermitRootLogin prohibit-password
+# Create the SSH admin user before applying the lock-down config.
+if ! id "$SSH_USER" >/dev/null 2>&1; then
+  echo "[+] Creating sudo user '$SSH_USER'"
+  useradd -m -s /usr/bin/zsh -G sudo "$SSH_USER"
+fi
 
-PasswordAuthentication yes
-KbdInteractiveAuthentication no
+mkdir -p /home/$SSH_USER/.ssh
+chmod 700 /home/$SSH_USER/.ssh
+chown $SSH_USER:$SSH_USER /home/$SSH_USER/.ssh
+
+touch /home/$SSH_USER/.ssh/authorized_keys
+chmod 600 /home/$SSH_USER/.ssh/authorized_keys
+chown $SSH_USER:$SSH_USER /home/$SSH_USER/.ssh/authorized_keys
+if ! grep -Fxq "$SSH_PUBKEY" /home/$SSH_USER/.ssh/authorized_keys 2>/dev/null; then
+  printf '%s\n' "$SSH_PUBKEY" >> /home/$SSH_USER/.ssh/authorized_keys
+  echo "[+] SSH public key added to /home/$SSH_USER/.ssh/authorized_keys"
+fi
+
+cat >/etc/ssh/sshd_config.d/99-security.conf <<EOF
+Port $SSH_PORT
+PermitRootLogin no
+PasswordAuthentication no
 ChallengeResponseAuthentication no
-
+KbdInteractiveAuthentication no
 PubkeyAuthentication yes
+PermitEmptyPasswords no
 
 MaxAuthTries 3
 LoginGraceTime 30
@@ -125,6 +146,7 @@ AllowAgentForwarding no
 
 ClientAliveInterval 300
 ClientAliveCountMax 2
+AllowUsers $SSH_USER
 EOF
 
 if sshd -t; then
@@ -136,30 +158,14 @@ if sshd -t; then
     journalctl -u ssh --no-pager -n 20 || true
     exit 1
   fi
-  if ! ss -tlnp | grep -q ':22'; then
-    echo "[!] SSH is not listening on port 22"
-    ss -tlnp | grep ':22' || true
+  if ! ss -tlnp | grep -q ":$SSH_PORT"; then
+    echo "[!] SSH is not listening on port $SSH_PORT"
+    ss -tlnp | grep ":$SSH_PORT" || true
     exit 1
   fi
 else
   echo "[!] SSH config invalid, aborting."
   exit 1
-fi
-
-echo "[+] Configuring SSH authorized_keys"
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
-if [ -n "$SSH_PUBKEY" ]; then
-  touch /root/.ssh/authorized_keys
-  chmod 600 /root/.ssh/authorized_keys
-  if ! grep -Fxq "$SSH_PUBKEY" /root/.ssh/authorized_keys 2>/dev/null; then
-    printf '%s\n' "$SSH_PUBKEY" >> /root/.ssh/authorized_keys
-    echo "[+] SSH public key added to /root/.ssh/authorized_keys"
-  fi
-else
-  echo "[!] Skipping SSH key setup (no SSH_PUBKEY provided)."
-  touch /root/.ssh/authorized_keys
-  chmod 600 /root/.ssh/authorized_keys
 fi
 
 mkdir -p /root/.docker
@@ -183,7 +189,7 @@ ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
 
-ufw allow 22/tcp
+ufw allow $SSH_PORT/tcp
 
 # Uncomment if needed
 # ufw allow 80/tcp
@@ -196,7 +202,7 @@ ufw --force enable
 
 echo "[+] Configuring Fail2Ban"
 
-cat >/etc/fail2ban/jail.local <<'EOF'
+cat >/etc/fail2ban/jail.local <<EOF
 [DEFAULT]
 Bantime = 24h
 Findtime = 15m
@@ -204,6 +210,7 @@ Maxretry = 5
 
 [sshd]
 enabled = true
+port = $SSH_PORT
 EOF
 
 systemctl enable fail2ban
@@ -303,7 +310,7 @@ apt autoclean -y
 echo "[+] Reloading SSH"
 systemctl reload ssh || systemctl restart ssh
 
-cat <<'EOF'
+cat <<EOF
 
 ==========================================
  VPS Bootstrap Completed Successfully
@@ -317,7 +324,8 @@ Installed:
  fail2ban, ufw, auditd
  unattended-upgrades
 
-Root login: SSH keys only
+SSH access: user '$SSH_USER' only, port $SSH_PORT
+Root login: disabled remotely
 Password login: disabled
 
 EOF
