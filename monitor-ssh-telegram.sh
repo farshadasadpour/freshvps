@@ -44,6 +44,13 @@ WantedBy=multi-user.target
 EOF
   chmod 644 "$UNIT_PATH"
 
+  if [ -n "${TELEGRAM_API_TOKEN:-}" ] && [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+    echo "[+] TELEGRAM_CHAT_ID not provided; trying discovery from getUpdates..."
+    if ! discover_chat_id; then
+      echo "[!] TELEGRAM_CHAT_ID not set and could not be discovered. Send a message to the bot and rerun with TELEGRAM_CHAT_ID." >&2
+    fi
+  fi
+
   if [ -n "${TELEGRAM_API_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
     echo "[+] Writing default environment file to $ENV_FILE"
     mkdir -p "$(dirname "$ENV_FILE")"
