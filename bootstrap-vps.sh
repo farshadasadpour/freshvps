@@ -158,6 +158,9 @@ ClientAliveCountMax 2
 AllowUsers $SSH_USER
 EOF
 
+
+systemctl restart sshd
+
 if sshd -t; then
   echo "[+] SSH config syntax OK"
   systemctl enable --now ssh
@@ -176,8 +179,6 @@ else
   echo "[!] SSH config invalid, aborting."
   exit 1
 fi
-
-systemctl restart sshd
 
 mkdir -p /root/.docker
 chmod 700 /root/.docker
