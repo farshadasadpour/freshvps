@@ -2,6 +2,20 @@
 
 set -euo pipefail
 
+###############################################################################
+# BOOTSTRAP-VPS.SH
+# Hardens a fresh Debian/Ubuntu VPS with SSH key auth, UFW, Fail2Ban,
+# auditd, sysctl tuning, and more.
+#
+# Usage:
+#   SSH_PUBKEY="$(cat ~/.ssh/id_rsa.pub)" sudo bash bootstrap-vps.sh
+#
+# Optional env vars:
+#   SSH_USER       — admin username to create   (default: code)
+#   SSH_PORT       — SSH port to listen on       (default: 2825)
+#   SWAP_SIZE      — swap file size              (default: 2G)
+###############################################################################
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "This script must be run as root. Use sudo or login as root."
   exit 1
@@ -10,11 +24,13 @@ fi
 SSH_PUBKEY="${SSH_PUBKEY:-}"
 SSH_USER="${SSH_USER:-code}"
 SSH_PORT="${SSH_PORT:-2825}"
+SWAP_SIZE="${SWAP_SIZE:-2G}"
 
+# ── Collect SSH public key interactively if not provided ─────────────────────
 if [ -z "$SSH_PUBKEY" ]; then
   if [ -t 0 ]; then
     echo "[!] IMPORTANT: SSH public key needed for secure access."
-    echo "[+] Enter public SSH public key for the admin user:"
+    echo "[+] Enter your SSH public key:"
     read -r SSH_PUBKEY
   fi
 fi
@@ -25,6 +41,10 @@ if [ -z "$SSH_PUBKEY" ]; then
   echo "[!] Example: SSH_PUBKEY=\"\$(cat ~/.ssh/id_rsa.pub)\" sudo bash bootstrap-vps.sh"
   exit 1
 fi
+
+###############################################################################
+# SYSTEM UPDATE
+###############################################################################
 
 echo "[+] Updating system"
 apt update
@@ -46,6 +66,7 @@ apt install -y \
   jq \
   tree \
   htop \
+  btop \
   tmux \
   screen \
   net-tools \
@@ -61,6 +82,7 @@ apt install -y \
   build-essential \
   bash-completion \
   zsh \
+  chrony \
   fail2ban \
   ufw \
   unattended-upgrades \
@@ -69,7 +91,16 @@ apt install -y \
   sysstat
 
 ###############################################################################
-# OH MY ZSH
+# TIME SYNC
+###############################################################################
+
+echo "[+] Enabling NTP time sync"
+systemctl enable chrony
+systemctl start chrony
+timedatectl set-ntp true
+
+###############################################################################
+# OH MY ZSH  (root + SSH_USER)
 ###############################################################################
 
 echo "[+] Installing Oh My Zsh"
@@ -77,11 +108,19 @@ echo "[+] Installing Oh My Zsh"
 export RUNZSH=no
 export CHSH=no
 
-if [ ! -d "/root/.oh-my-zsh" ]; then
-  sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-fi
+_install_ohmyzsh_for() {
+  local target_home="$1"
+  local target_user="$2"
 
-cat >/root/.zshrc <<'EOF'
+  if [ ! -d "$target_home/.oh-my-zsh" ]; then
+    if [ "$target_user" = "root" ]; then
+      sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+    else
+      sudo -u "$target_user" sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+    fi
+  fi
+
+  cat >"$target_home/.zshrc" <<'EOF'
 export ZSH="$HOME/.oh-my-zsh"
 
 ZSH_THEME="robbyrussell"
@@ -100,23 +139,22 @@ alias l='ls -CF'
 alias k='kubectl'
 EOF
 
-chsh -s /usr/bin/zsh root || true
+  chown "$target_user:$target_user" "$target_home/.zshrc"
+}
+
+_install_ohmyzsh_for /root root
 
 ###############################################################################
-# SSH HARDENING
+# SSH USER SETUP
 ###############################################################################
 
-echo "[+] Configuring SSH"
+echo "[+] Creating sudo user '$SSH_USER'"
 
-mkdir -p /etc/ssh/sshd_config.d
-
-# Create the SSH admin user before applying the lock-down config.
 if ! id "$SSH_USER" >/dev/null 2>&1; then
-  echo "[+] Creating sudo user '$SSH_USER'"
   useradd -m -s /usr/bin/zsh -G sudo "$SSH_USER"
 fi
 
-# Grant passwordless sudo for the new user.
+# Passwordless sudo
 cat >/etc/sudoers.d/$SSH_USER <<EOF
 $SSH_USER ALL=(ALL) NOPASSWD:ALL
 EOF
@@ -126,6 +164,7 @@ visudo -cf /etc/sudoers.d/$SSH_USER >/dev/null 2>&1 || {
   exit 1
 }
 
+# SSH authorized_keys
 mkdir -p /home/$SSH_USER/.ssh
 chmod 700 /home/$SSH_USER/.ssh
 chown $SSH_USER:$SSH_USER /home/$SSH_USER/.ssh
@@ -133,10 +172,22 @@ chown $SSH_USER:$SSH_USER /home/$SSH_USER/.ssh
 touch /home/$SSH_USER/.ssh/authorized_keys
 chmod 600 /home/$SSH_USER/.ssh/authorized_keys
 chown $SSH_USER:$SSH_USER /home/$SSH_USER/.ssh/authorized_keys
+
 if ! grep -Fxq "$SSH_PUBKEY" /home/$SSH_USER/.ssh/authorized_keys 2>/dev/null; then
   printf '%s\n' "$SSH_PUBKEY" >> /home/$SSH_USER/.ssh/authorized_keys
-  echo "[+] SSH public key added to /home/$SSH_USER/.ssh/authorized_keys"
+  echo "[+] SSH public key added for '$SSH_USER'"
 fi
+
+# Install Oh My Zsh for the new user too
+_install_ohmyzsh_for /home/$SSH_USER $SSH_USER
+
+###############################################################################
+# SSH HARDENING  (validate config BEFORE restarting)
+###############################################################################
+
+echo "[+] Configuring SSH"
+
+mkdir -p /etc/ssh/sshd_config.d
 
 cat >/etc/ssh/sshd_config.d/99-security.conf <<EOF
 Port $SSH_PORT
@@ -158,27 +209,36 @@ ClientAliveCountMax 2
 AllowUsers $SSH_USER
 EOF
 
-
-systemctl restart sshd
-
+# ── Validate BEFORE touching the running daemon ───────────────────────────────
 if sshd -t; then
   echo "[+] SSH config syntax OK"
-  systemctl enable --now ssh
-  if ! systemctl is-active --quiet ssh; then
-    echo "[!] SSH service failed to start"
-    systemctl status ssh --no-pager || true
-    journalctl -u ssh --no-pager -n 20 || true
-    exit 1
-  fi
-  if ! ss -tlnp | grep -q ":$SSH_PORT"; then
-    echo "[!] SSH is not listening on port $SSH_PORT"
-    ss -tlnp | grep ":$SSH_PORT" || true
-    exit 1
-  fi
 else
-  echo "[!] SSH config invalid, aborting."
+  echo "[!] SSH config invalid — aborting before restart to avoid lockout."
   exit 1
 fi
+
+systemctl restart sshd
+systemctl enable --now ssh
+
+# Verify the daemon is actually listening
+if ! systemctl is-active --quiet ssh; then
+  echo "[!] SSH service failed to start:"
+  systemctl status ssh --no-pager || true
+  journalctl -u ssh --no-pager -n 20 || true
+  exit 1
+fi
+
+if ! ss -tlnp | grep -q ":$SSH_PORT"; then
+  echo "[!] SSH is not listening on port $SSH_PORT — check config"
+  ss -tlnp || true
+  exit 1
+fi
+
+echo "[+] SSH is listening on port $SSH_PORT"
+
+###############################################################################
+# DOCKER CONFIG STUB
+###############################################################################
 
 mkdir -p /root/.docker
 chmod 700 /root/.docker
@@ -186,27 +246,33 @@ if [ -d /root/.docker/config.json ]; then
   rm -rf /root/.docker/config.json
 fi
 if [ ! -f /root/.docker/config.json ]; then
-  printf '{}\n' > /root/.docker/config.json
+  printf '{}\n' >/root/.docker/config.json
   chmod 600 /root/.docker/config.json
 fi
 
 ###############################################################################
-# FIREWALL
+# FIREWALL (UFW)
 ###############################################################################
 
 echo "[+] Configuring UFW"
+
+# Ensure IPv6 support is enabled in UFW config
+sed -i 's/^IPV6=.*/IPV6=yes/' /etc/default/ufw
 
 ufw --force reset
 
 ufw default deny incoming
 ufw default allow outgoing
 
-ufw allow $SSH_PORT/tcp
+ufw allow $SSH_PORT/tcp comment 'SSH'
 
-# Uncomment if needed
-# ufw allow 80/tcp
-# ufw allow 443/tcp
+# Uncomment if needed:
+# ufw allow 80/tcp  comment 'HTTP'
+# ufw allow 443/tcp comment 'HTTPS'
+
 ufw --force enable
+
+echo "[+] UFW rules applied (IPv4 + IPv6)"
 
 ###############################################################################
 # FAIL2BAN
@@ -216,13 +282,13 @@ echo "[+] Configuring Fail2Ban"
 
 cat >/etc/fail2ban/jail.local <<EOF
 [DEFAULT]
-Bantime = 24h
-Findtime = 15m
-Maxretry = 5
+bantime  = 24h
+findtime = 15m
+maxretry = 5
 
 [sshd]
 enabled = true
-port = $SSH_PORT
+port    = $SSH_PORT
 EOF
 
 systemctl enable fail2ban
@@ -244,27 +310,27 @@ DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive unattended-upg
 echo "[+] Configuring auditd"
 
 cat >/etc/audit/rules.d/custom.rules <<'EOF'
--w /etc/passwd -p wa
--w /etc/group -p wa
--w /etc/shadow -p wa
--w /etc/sudoers -p wa
--w /usr/bin/sudo -p x
+-w /etc/passwd   -p wa -k identity
+-w /etc/group    -p wa -k identity
+-w /etc/shadow   -p wa -k identity
+-w /etc/sudoers  -p wa -k sudoers
+-w /usr/bin/sudo -p x  -k sudoers
 EOF
 
 systemctl enable auditd
 systemctl restart auditd
 
 ###############################################################################
-# SWAP (2G)
+# SWAP
 ###############################################################################
 
 if [ ! -f /swapfile ]; then
-  echo "[+] Creating swap"
-  fallocate -l 2G /swapfile
+  echo "[+] Creating ${SWAP_SIZE} swap file"
+  fallocate -l "$SWAP_SIZE" /swapfile
   chmod 600 /swapfile
   mkswap /swapfile
   swapon /swapfile
-  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  echo '/swapfile none swap sw 0 0' >>/etc/fstab
 fi
 
 ###############################################################################
@@ -274,16 +340,20 @@ fi
 echo "[+] Applying sysctl tuning"
 
 cat >/etc/sysctl.d/99-custom.conf <<'EOF'
+# Memory
 vm.swappiness=10
 vm.vfs_cache_pressure=50
 
+# Network performance
 net.core.somaxconn=4096
 net.ipv4.tcp_max_syn_backlog=8192
 net.ipv4.tcp_syncookies=1
 
+# Reverse path filtering (anti-spoofing)
 net.ipv4.conf.all.rp_filter=1
 net.ipv4.conf.default.rp_filter=1
 
+# Kernel hardening
 kernel.kptr_restrict=2
 kernel.dmesg_restrict=1
 EOF
@@ -316,11 +386,14 @@ apt autoremove -y
 apt autoclean -y
 
 ###############################################################################
-# RELOAD SERVICES
+# FINAL RELOAD
 ###############################################################################
 
-echo "[+] Reloading SSH"
 systemctl reload ssh || systemctl restart ssh
+
+###############################################################################
+# SUMMARY
+###############################################################################
 
 cat <<EOF
 
@@ -328,16 +401,30 @@ cat <<EOF
  VPS Bootstrap Completed Successfully
 ==========================================
 
-Installed:
- vim, curl, wget, git, jq
- htop, btop, tmux, screen
- tcpdump, dnsutils, traceroute
- zsh + oh-my-zsh
- fail2ban, ufw, auditd
- unattended-upgrades
+System:
+  Swap ............. $SWAP_SIZE at /swapfile
+  Time sync ........ chrony (NTP enabled)
+  Auto updates ..... unattended-upgrades
 
-SSH access: user '$SSH_USER' only, port $SSH_PORT
-Root login: disabled remotely
-Password login: disabled
+Security:
+  SSH user ......... $SSH_USER  (port $SSH_PORT)
+  Root SSH login ... disabled
+  Password login ... disabled
+  UFW .............. default deny (IPv4 + IPv6)
+  Fail2Ban ......... enabled (ban 24h after 5 attempts)
+  Auditd ........... watching passwd, shadow, sudoers
+  SSH config ....... validated before restart
 
+Tools installed:
+  vim, nano, curl, wget, git, jq, tree
+  htop, btop, tmux, screen
+  tcpdump, dnsutils, traceroute, lsof
+  zsh + oh-my-zsh  (root + $SSH_USER)
+  fail2ban, ufw, auditd, chrony
+  unattended-upgrades, sysstat
+
+Next steps:
+  ssh -p $SSH_PORT $SSH_USER@<your-server-ip>
+
+==========================================
 EOF
