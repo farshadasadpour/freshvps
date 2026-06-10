@@ -88,7 +88,8 @@ apt install -y \
   unattended-upgrades \
   auditd \
   audispd-plugins \
-  sysstat
+  sysstat \
+  python3.12-venv
 
 ###############################################################################
 # TIME SYNC
