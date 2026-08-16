@@ -93,7 +93,9 @@ apt install -y \
   auditd \
   audispd-plugins \
   sysstat \
-  python3.12-venv
+  python3.12-venv \
+  certbot \
+  python3-certbot-nginx
 
 ###############################################################################
 # TIME SYNC
@@ -385,6 +387,15 @@ RuntimeMaxUse=100M
 EOF
 
 systemctl restart systemd-journald
+
+###############################################################################
+# CERTBOT AUTO-RENEWAL
+###############################################################################
+
+if systemctl list-unit-files | grep -q '^certbot-renew.timer'; then
+  echo "[+] Enabling certbot auto-renewal timer"
+  systemctl enable --now certbot-renew.timer
+fi
 
 ###############################################################################
 # CLEANUP
