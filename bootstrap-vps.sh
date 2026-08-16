@@ -11,9 +11,10 @@ set -euo pipefail
 #   SSH_PUBKEY="$(cat ~/.ssh/id_rsa.pub)" sudo bash bootstrap-vps.sh
 #
 # Optional env vars:
-#   SSH_USER       — admin username to create   (default: code)
-#   SSH_PORT       — SSH port to listen on       (default: 2825)
-#   SWAP_SIZE      — swap file size              (default: 2G)
+#   SSH_USER        — admin username to create        (default: code)
+#   SSH_PORT        — SSH port to listen on            (default: 2825)
+#   SWAP_SIZE       — swap file size, G suffix         (default: 2G)
+#   ENABLE_FIREWALL — configure UFW firewall (1=yes)   (default: 0)
 ###############################################################################
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -25,6 +26,7 @@ SSH_PUBKEY="${SSH_PUBKEY:-}"
 SSH_USER="${SSH_USER:-code}"
 SSH_PORT="${SSH_PORT:-2825}"
 SWAP_SIZE="${SWAP_SIZE:-2G}"
+ENABLE_FIREWALL="${ENABLE_FIREWALL:-0}"
 
 # ── Collect SSH public key interactively if not provided ─────────────────────
 if [ -z "$SSH_PUBKEY" ]; then
@@ -41,6 +43,9 @@ if [ -z "$SSH_PUBKEY" ]; then
   echo "[!] Example: SSH_PUBKEY=\"\$(cat ~/.ssh/id_rsa.pub)\" sudo bash bootstrap-vps.sh"
   exit 1
 fi
+
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
 
 ###############################################################################
 # SYSTEM UPDATE
@@ -84,7 +89,6 @@ apt install -y \
   zsh \
   chrony \
   fail2ban \
-  ufw \
   unattended-upgrades \
   auditd \
   audispd-plugins \
@@ -213,65 +217,49 @@ EOF
 # ── Validate BEFORE touching the running daemon ───────────────────────────────
 if sshd -t; then
   echo "[+] SSH config syntax OK"
+  systemctl enable --now ssh
+  systemctl restart ssh
+  if ! systemctl is-active --quiet ssh; then
+    echo "[!] SSH service failed to start:"
+    systemctl status ssh --no-pager || true
+    journalctl -u ssh --no-pager -n 20 || true
+    exit 1
+  fi
+  if ! ss -tlnp | grep -qE "[:.]${SSH_PORT}\\b"; then
+    echo "[!] SSH is not listening on port $SSH_PORT — check config"
+    ss -tlnp | grep -E "[:.]${SSH_PORT}\\b" || true
+    exit 1
+  fi
+  echo "[+] SSH is listening on port $SSH_PORT"
 else
   echo "[!] SSH config invalid — aborting before restart to avoid lockout."
   exit 1
 fi
 
-systemctl restart sshd
-systemctl enable --now ssh
-
-# Verify the daemon is actually listening
-if ! systemctl is-active --quiet ssh; then
-  echo "[!] SSH service failed to start:"
-  systemctl status ssh --no-pager || true
-  journalctl -u ssh --no-pager -n 20 || true
-  exit 1
-fi
-
-if ! ss -tlnp | grep -q ":$SSH_PORT"; then
-  echo "[!] SSH is not listening on port $SSH_PORT — check config"
-  ss -tlnp || true
-  exit 1
-fi
-
-echo "[+] SSH is listening on port $SSH_PORT"
-
 ###############################################################################
-# DOCKER CONFIG STUB
+# FIREWALL (optional, default off)
 ###############################################################################
 
-mkdir -p /root/.docker
-chmod 700 /root/.docker
-if [ -d /root/.docker/config.json ]; then
-  rm -rf /root/.docker/config.json
-fi
-if [ ! -f /root/.docker/config.json ]; then
-  printf '{}\n' >/root/.docker/config.json
-  chmod 600 /root/.docker/config.json
-fi
-
-###############################################################################
-# FIREWALL (UFW)
-###############################################################################
+if [ "${ENABLE_FIREWALL:-0}" = "1" ]; then
+  echo "[+] Installing ufw"
+  apt install -y ufw
 
 echo "[+] Configuring UFW"
 
-# Ensure IPv6 support is enabled in UFW config
-sed -i 's/^IPV6=.*/IPV6=yes/' /etc/default/ufw
+  sed -i 's/^IPV6=.*/IPV6=yes/' /etc/default/ufw
 
-ufw --force reset
+  ufw --force reset
 
 ufw default deny incoming
-ufw default allow outgoing
+  ufw default allow outgoing
 
-ufw allow $SSH_PORT/tcp comment 'SSH'
+  ufw allow $SSH_PORT/tcp comment 'SSH'
 
-# Uncomment if needed:
-# ufw allow 80/tcp  comment 'HTTP'
-# ufw allow 443/tcp comment 'HTTPS'
-
-ufw --force enable
+  # Uncomment if needed:
+  # ufw allow 80/tcp  comment 'HTTP'
+  # ufw allow 443/tcp comment 'HTTPS'
+  ufw --force enable
+fi
 
 echo "[+] UFW rules applied (IPv4 + IPv6)"
 
@@ -326,8 +314,8 @@ systemctl restart auditd
 ###############################################################################
 
 if [ ! -f /swapfile ]; then
-  echo "[+] Creating ${SWAP_SIZE} swap file"
-  fallocate -l "$SWAP_SIZE" /swapfile
+echo "[+] Creating ${SWAP_SIZE} swap file"
+  dd if=/dev/zero of=/swapfile bs=1M count="$(( ${SWAP_SIZE%G} * 1024 ))" status=progress
   chmod 600 /swapfile
   mkswap /swapfile
   swapon /swapfile
@@ -354,9 +342,30 @@ net.ipv4.tcp_syncookies=1
 net.ipv4.conf.all.rp_filter=1
 net.ipv4.conf.default.rp_filter=1
 
+net.ipv4.conf.all.accept_redirects=0
+net.ipv4.conf.default.accept_redirects=0
+net.ipv6.conf.all.accept_redirects=0
+net.ipv6.conf.default.accept_redirects=0
+
+net.ipv4.conf.all.send_redirects=0
+net.ipv4.conf.default.send_redirects=0
+
+net.ipv4.conf.all.accept_source_route=0
+net.ipv4.conf.default.accept_source_route=0
+net.ipv6.conf.all.accept_source_route=0
+net.ipv6.conf.default.accept_source_route=0
+
+net.ipv4.icmp_echo_ignore_broadcasts=1
+net.ipv4.tcp_rfc1337=1
+
 # Kernel hardening
 kernel.kptr_restrict=2
 kernel.dmesg_restrict=1
+kernel.randomize_va_space=2
+kernel.yama.ptrace_scope=2
+
+fs.protected_hardlinks=1
+fs.protected_symlinks=1
 EOF
 
 sysctl --system
@@ -396,6 +405,16 @@ systemctl reload ssh || systemctl restart ssh
 # SUMMARY
 ###############################################################################
 
+UFW_STATUS="not configured (ENABLE_FIREWALL=0)"
+if [ "${ENABLE_FIREWALL:-0}" = "1" ]; then
+  UFW_STATUS="default deny (IPv4 + IPv6)"
+fi
+
+TOOLS_SEC="fail2ban, auditd, chrony"
+if [ "${ENABLE_FIREWALL:-0}" = "1" ]; then
+  TOOLS_SEC="fail2ban, ufw, auditd, chrony"
+fi
+
 cat <<EOF
 
 ==========================================
@@ -411,7 +430,7 @@ Security:
   SSH user ......... $SSH_USER  (port $SSH_PORT)
   Root SSH login ... disabled
   Password login ... disabled
-  UFW .............. default deny (IPv4 + IPv6)
+  UFW .............. $UFW_STATUS
   Fail2Ban ......... enabled (ban 24h after 5 attempts)
   Auditd ........... watching passwd, shadow, sudoers
   SSH config ....... validated before restart
@@ -420,8 +439,8 @@ Tools installed:
   vim, nano, curl, wget, git, jq, tree
   htop, btop, tmux, screen
   tcpdump, dnsutils, traceroute, lsof
-  zsh + oh-my-zsh  (root + $SSH_USER)
-  fail2ban, ufw, auditd, chrony
+  zsh + oh-my-zsh  (root only)
+$TOOLS_SEC
   unattended-upgrades, sysstat
 
 Next steps:

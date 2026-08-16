@@ -66,7 +66,7 @@ The script performs:
 - installs common tools
 - installs Oh My Zsh for root
 - hardens SSH
-- configures UFW firewall
+- configures UFW firewall (optional, opt-in via `ENABLE_FIREWALL=1`)
 - enables Fail2Ban and auditd
 - enables unattended upgrades
 - adds 2 GB swap
