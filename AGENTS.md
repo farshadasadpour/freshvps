@@ -27,6 +27,14 @@ These values are hardcoded/written into multiple config files and must be kept c
 - Re-runs are safe-ish: oh-my-zsh install, swap creation, and `authorized_keys` append are guarded; ssh config, fail2ban, sysctl, and journald conf files are **overwritten** every run.
 - `ufw --force reset` wipes any pre-existing firewall rules each run — but only when `ENABLE_FIREWALL=1`.
 
+## oh-my-zsh install gotchas (non-root users)
+
+The installer is run for root and for `$SSH_USER` (see `_install_ohmyzsh_for`). Both of these break it if "fixed" naively:
+
+- `sudo -u user sh -c "install.sh"` inherits the parent's CWD (often `/root`, mode 700), and the installer's `cd -` then fails for the unprivileged user → `set -e` aborts the whole bootstrap. Must `cd "$HOME"` first.
+- `sudo` strips exported `RUNZSH`/`CHSH`, so the installer defaults them to `yes` and launches an interactive `zsh`, hanging the script forever when stdin is a TTY (e.g. inside tmux). Must pass `RUNZSH=no CHSH=no` inside the `sudo` command and run with `< /dev/null`.
+- Verify any change here against a real non-root install — a plain `bash -n` won't catch either failure mode.
+
 ## Verification
 
 No test framework. Check syntax with `bash -n bootstrap-vps.sh`; run `shellcheck` if available. The script itself self-checks sshd config (`sshd -t`) and that ssh is listening on the new port before restarting.
